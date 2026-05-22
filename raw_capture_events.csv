@@ -1,0 +1,58 @@
+ts_epoch,event,phase,label,notes
+1776113549.127733672,run_start,setup,N/A,dataset run started
+1776113552.309730972,capture_start,setup,N/A,capture started
+1776113555.924618364,phase_start,warmup,Normal,background startup no attack
+1776113575.948080329,phase_end,warmup,Normal,background startup no attack
+1776113575.957476890,phase_start,baseline_1,Normal,benign RA NS NA and normal IPv6 traffic
+1776113925.971628229,phase_end,baseline_1,Normal,benign RA NS NA and normal IPv6 traffic
+1776113928.149781920,phase_start,ra_attack_1,RA_Attack,variable-rate RA flood
+1776114011.382397663,phase_end,ra_attack_1,RA_Attack,variable-rate RA flood
+1776114013.748926392,phase_start,recovery_1,Normal,post RA1 recovery
+1776114173.769118650,phase_end,recovery_1,Normal,post RA1 recovery
+1776114175.935395547,phase_start,nd_attack_1,ND_Attack,variable-rate NS flood
+1776114258.784356529,phase_end,nd_attack_1,ND_Attack,variable-rate NS flood
+1776114261.844484023,phase_start,recovery_2,Normal,post ND1 recovery
+1776114421.857109295,phase_end,recovery_2,Normal,post ND1 recovery
+1776114422.003295553,phase_start,ra_slow_1,RA_Attack,low-and-slow RA 1-per-4-9s
+1776114522.112245995,phase_end,ra_slow_1,RA_Attack,low-and-slow RA 1-per-4-9s
+1776114524.287090252,phase_start,recovery_3,Normal,post RA-slow1 recovery
+1776114654.301055916,phase_end,recovery_3,Normal,post RA-slow1 recovery
+1776114656.488403999,phase_start,ra_attack_2,RA_Attack,second variable-rate RA flood
+1776114739.064767276,phase_end,ra_attack_2,RA_Attack,second variable-rate RA flood
+1776114741.276587572,phase_start,recovery_4,Normal,post RA2 recovery
+1776114861.292637107,phase_end,recovery_4,Normal,post RA2 recovery
+1776114863.543114969,phase_start,nd_attack_2,ND_Attack,second variable-rate NS flood
+1776114946.687855198,phase_end,nd_attack_2,ND_Attack,second variable-rate NS flood
+1776114949.963510716,phase_start,recovery_5,Normal,post ND2 recovery
+1776115039.977202830,phase_end,recovery_5,Normal,post ND2 recovery
+1776115042.151075344,phase_start,ra_attack_4,RA_Attack,fourth variable-rate RA flood
+1776115135.040813867,phase_end,ra_attack_4,RA_Attack,fourth variable-rate RA flood
+1776115137.207299497,phase_start,recovery_7,Normal,post RA4 recovery
+1776115237.219551090,phase_end,recovery_7,Normal,post RA4 recovery
+1776115239.396671913,phase_start,nd_attack_3,ND_Attack,third variable-rate NS flood
+1776115322.379747599,phase_end,nd_attack_3,ND_Attack,third variable-rate NS flood
+1776115325.433287453,phase_start,recovery_8,Normal,post ND3 recovery
+1776115415.446156040,phase_end,recovery_8,Normal,post ND3 recovery
+1776115415.588242993,phase_start,nd_slow_1,ND_Attack,low-and-slow ND 1-per-4-9s VOL-9
+1776115490.690794425,phase_end,nd_slow_1,ND_Attack,low-and-slow ND 1-per-4-9s VOL-9
+1776115493.205856806,phase_start,recovery_9,Normal,post ND-slow1 recovery
+1776115583.219005158,phase_end,recovery_9,Normal,post ND-slow1 recovery
+1776115585.450907227,phase_start,ra_attack_5,RA_Attack,fifth variable-rate RA flood VOL-9
+1776115662.936284846,phase_end,ra_attack_5,RA_Attack,fifth variable-rate RA flood VOL-9
+1776115665.131905819,phase_start,recovery_10,Normal,post RA5 recovery
+1776115745.145159654,phase_end,recovery_10,Normal,post RA5 recovery
+1776115747.373176704,phase_start,combined_attack,Combined_Attack,simultaneous RA+ND variable flood VOL-9
+1776115851.641138007,phase_end,combined_attack,Combined_Attack,simultaneous RA+ND variable flood VOL-9
+1776115854.624619571,phase_start,recovery_6,Normal,short recovery before ra_attack_3
+1776115914.637838128,phase_end,recovery_6,Normal,short recovery before ra_attack_3
+1776115916.836684265,phase_start,ra_attack_3,RA_Attack,third RA straddles 80pct boundary
+1776116041.150493235,phase_end,ra_attack_3,RA_Attack,third RA straddles 80pct boundary
+1776116043.452061632,phase_start,ra_slow_2,RA_Attack,second low-and-slow RA in test region
+1776116118.541132101,phase_end,ra_slow_2,RA_Attack,second low-and-slow RA in test region
+1776116122.936111188,phase_start,nd_attack_4,ND_Attack,fourth variable-rate NS flood VOL-9
+1776116200.727032485,phase_end,nd_attack_4,ND_Attack,fourth variable-rate NS flood VOL-9
+1776116203.647707956,phase_start,recovery_11,Normal,post ND4 recovery
+1776116273.672320616,phase_end,recovery_11,Normal,post ND4 recovery
+1776116273.702438356,phase_start,baseline_final,Normal,final clean normal period
+1776116363.734967473,phase_end,baseline_final,Normal,final clean normal period
+1776116363.753147506,capture_stop,teardown,N/A,capture stopping

@@ -1,484 +1,485 @@
-# ipv6-ids
-IPv6 Security
+# IPv6 ND/RA Intrusion Detection in a Containerlab Digital Twin
 
-# IPv6 Neighbor Discovery / Router Advertisement — ML-based IDS
+> **Master's thesis project — reproducibility repository**
+> Machine-learning-based detection of IPv6 Neighbour Discovery and Router Advertisement attacks, evaluated on a 23-node Containerlab digital twin and externally validated against a third-party dataset.
 
-> **Master's Thesis Project**  
-> Machine Learning Intrusion Detection System for IPv6 ND/RA Attacks  
-> Built on a Containerlab Digital Twin Network Environment
+This repository contains everything needed to reproduce the experiment end-to-end on a clean Windows 11 host: the Containerlab topology, the capture orchestrator, the ML training and evaluation pipeline, and the external-validation notebook. Pseudo-random seeds, hyperparameter sweep ranges, attack tools and phase durations are fixed in code and listed explicitly below so a reader can verify any parameter without rerunning anything.
 
 ---
 
-## Table of Contents
+## Table of contents
 
-1. [Project Overview](#1-project-overview)
-2. [Network Topology — Digital Twin](#2-network-topology--digital-twin)
-3. [Attack Simulations](#3-attack-simulations)
-4. [Traffic Capture](#4-traffic-capture)
-5. [Prerequisites & Installation](#5-prerequisites--installation)
-6. [Project Structure](#6-project-structure)
-7. [Running the Pipeline](#7-running-the-pipeline)
-8. [Pipeline Architecture](#8-pipeline-architecture)
-9. [Feature Engineering](#9-feature-engineering)
-10. [Machine Learning Methodology](#10-machine-learning-methodology)
-11. [Output Files](#11-output-files)
-12. [Visualisations](#12-visualisations)
-13. [Configuration Reference](#13-configuration-reference)
-14. [Troubleshooting](#14-troubleshooting)
-15. [Background & Theory](#15-background--theory)
-
----
-
-## 1. Project Overview
-
-This project implements a **machine learning–based Intrusion Detection System (IDS)** designed to detect and classify malicious **IPv6 Neighbor Discovery (ND)** and **Router Advertisement (RA)** attacks in real time. The IDS is trained and validated against traffic captured from an **18-node Containerlab digital twin** of a real IPv6 network.
-
-The pipeline ingests a raw packet capture file (`raw_capture.pcap`), extracts 30 per-packet features from the IPv6 and ICMPv6 layers, selects the most discriminative features using **SelectKBest with χ² scoring**, and trains a **Random Forest classifier** to distinguish three traffic classes:
-
-| Class Label | ICMPv6 Type | Description |
-|---|---|---|
-| `Normal` | 133, 136, other | Legitimate IPv6 / ICMPv6 traffic |
-| `RA_Attack` | 134 | Router Advertisement flood (`atk6-flood_router26`) |
-| `ND_Attack` | 135 | Neighbor Solicitation exhaustion (`atk6-flood_solicitate6`) |
-
-Key evaluation metrics reported are **Balanced Accuracy**, **Macro F1-Score**, and **standard Accuracy** — evaluated across a sweep of feature counts k ∈ {5, 10, 15, 20, 25, 30} and validated with **10-fold stratified cross-validation**.
+1. [What this project does](#1-what-this-project-does)
+2. [Repository layout](#2-repository-layout)
+3. [Stage map](#3-stage-map)
+4. [Prerequisites](#4-prerequisites)
+5. [Stage 1 — Build the digital twin](#5-stage-1--build-the-digital-twin)
+6. [Stage 2 — Capture the labelled dataset](#6-stage-2--capture-the-labelled-dataset)
+7. [Stage 3 — Train and evaluate the IDS](#7-stage-3--train-and-evaluate-the-ids)
+8. [Stage 4 — External validation](#8-stage-4--external-validation)
+9. [Features, classes and labelling](#9-features-classes-and-labelling)
+10. [Fixed seeds and constants](#10-fixed-seeds-and-constants)
+11. [Outputs](#11-outputs)
+12. [Reproducibility and falsifiability](#12-reproducibility-and-falsifiability)
+13. [Troubleshooting](#13-troubleshooting)
+14. [Threat model and background](#14-threat-model-and-background)
+15. [Citation](#15-citation)
+16. [License](#16-license)
 
 ---
 
-## 2. Network Topology — Digital Twin
+## 1. What this project does
 
-The experimental environment is a **Containerlab** topology named `ipv6-research` consisting of 18 nodes.
+The pipeline turns raw IPv6 traffic from a controlled lab into a labelled, windowed dataset and trains two classifiers on it:
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                  Containerlab: ipv6-research             │
-│                                                         │
-│   [router]──────┐                                       │
-│   (radvd/RA)    │                                       │
-│                 ▼                                       │
-│   [attacker]──► [switch-br] ◄──── [victim × 15]        │
-│   (Kali/THC)    (br0 bridge)       (tcpdump eth1)       │
-└─────────────────────────────────────────────────────────┘
-```
+- **XGBoost** and **Random Forest** (co-primary in this study), tuned by stratified 5-fold cross-validation over their hyperparameter grids.
+- **Four classes**: `Normal`, `RA_Attack`, `ND_Attack`, `Combined_Attack`.
+- **One-second windows** with 18 engineered features covering packet rates, RA/NS/NA counts, burstiness, inter-arrival statistics and source/target diversity.
+- Two independent stratified splits (seeds 42 and 123) plus 5-fold CV for stability checks, single-feature leakage scans and 500-iteration bootstrap 95% confidence intervals.
+- An **external-validation step** that scores a third-party CSV against the trained model bundle to test generalisation outside the digital twin.
 
-| Node | Container Name | Role |
-|---|---|---|
-| `switch-br` | `clab-ipv6-research-switch-br` | Linux bridge container (alpine:latest) — internal Layer 2 switch connecting all nodes via an internal `br0` bridge; keeps the host machine clean |
-| `router` | `clab-ipv6-research-router` | Legitimate Router Advertisement source running **radvd** (alpine:latest) |
-| `victim` × 15 | `clab-ipv6-research-victim` | Traffic sensor nodes running **tcpdump** on `eth1` — primary capture point |
-| `attacker` | `clab-ipv6-research-attacker` | Kali Linux node running the **THC-IPv6** toolkit |
-
-The switch-br node hosts an internal Linux bridge (`br0`) inside its container. All multicast attack traffic from the attacker propagates through this bridge and reaches all victim nodes on the same Layer 2 segment.
+The headline result reported in the thesis is the balanced accuracy and macro-F1 of both classifiers on the held-out test set, with bootstrap CIs. The procedure is designed so that running it again from a fresh capture either confirms or refutes those figures.
 
 ---
 
-## 3. Attack Simulations
-
-Two distinct THC-IPv6 attacks were executed from the `attacker` node against the live topology:
-
-### 3.1 RA Flood Attack — `atk6-flood_router26`
-
-```bash
-# Executed on the attacker node
-atk6-flood_router26 eth1
-```
-
-**Mechanism:** Floods the network with a high-rate burst of **fake Router Advertisement packets** (ICMPv6 Type 134). Each fake RA carries a randomised source link-local address (`fe80::/10`) and either a zero or maximum (`65535`) router lifetime, causing victim nodes to repeatedly update and corrupt their default gateway routing tables.
-
-**Network fingerprint:**
-- ICMPv6 Type = 134
-- `hop_limit` = 255 (RFC-mandated)
-- Source always in `fe80::/10`, destination `ff02::1` (all-nodes multicast)
-- Inter-arrival time < 0.1 ms (burst pattern)
-- Packet size 86–120 bytes
-
-### 3.2 ND Exhaustion Attack — `atk6-flood_solicitate6`
-
-```bash
-# Executed on the attacker node
-atk6-flood_solicitate6 eth1
-```
-
-**Mechanism:** Floods the network with **Neighbor Solicitation packets** (ICMPv6 Type 135) targeting randomised IPv6 addresses. Victim nodes are forced to allocate neighbor cache entries for each solicited address, exhausting kernel memory and degrading or crashing the neighbor discovery subsystem.
-
-**Network fingerprint:**
-- ICMPv6 Type = 135
-- `hop_limit` = 255
-- Randomised target addresses (not unspecified `::`)
-- Inter-arrival time < 0.05 ms (very bursty)
-- Packet size 72–96 bytes
-
----
-
-## 4. Traffic Capture
-
-**tcpdump** was run simultaneously on:
-- All 15 victim nodes (`eth1` interface)
-- The attacker machine (for ground-truth labelling)
-
-```bash
-# Command run on each victim node
-tcpdump -i eth1 -w raw_capture.pcap
-```
-
-The resulting `raw_capture.pcap` contains a mix of normal IPv6 traffic (Router Solicitations, Neighbor Advertisements, etc.) interleaved with both attack types. This file is the primary input to the ML pipeline.
-
----
-
-## 5. Prerequisites & Installation
-
-### Python Version
-
-Python 3.8 or higher is required.
-
-### Required Libraries
-
-All libraries listed below must be installed. If running in VS Code with a dedicated virtual environment, install with:
-
-```bash
-pip install numpy pandas matplotlib scikit-learn plotly scapy
-```
-
-| Library | Purpose |
-|---|---|
-| `numpy` | Numerical array operations |
-| `pandas` | DataFrame construction and CSV I/O |
-| `matplotlib` | Static plots (curves, bar charts, confusion matrix) |
-| `scikit-learn` | ML pipeline — RandomForest, SelectKBest, cross-validation, metrics |
-| `plotly` | Interactive 3-D classification scatter (HTML output) |
-| `scapy` | Raw pcap parsing and IPv6 / ICMPv6 layer dissection |
-
-> **Note:** `scapy` is only required when running with a real pcap file. If using the `--synthetic` flag, scapy is not imported and does not need to be installed.
-
-### VS Code Setup
-
-1. Open the project folder in VS Code.
-2. Select your Python interpreter (bottom-left status bar → `Python x.x.x`).
-3. Open the integrated terminal (`Ctrl+`` ` or `View → Terminal`).
-4. Install dependencies if not already present (see above).
-5. Place `raw_capture.pcap` in the same folder as `ipv6_ids_pipeline.py`.
-
----
-
-## 6. Project Structure
+## 2. Repository layout
 
 ```
-project-root/
+ipv6-ids/
+├── README.md                          ← this file
+├── LICENSE                            ← see §16
+├── .gitattributes
 │
-├── ipv6_ids_pipeline.py          ← Main pipeline script
-├── raw_capture.pcap              ← Raw packet capture (place here before running)
+├── topology/
+│   └── ipv6-research.clab.yml         ← Containerlab 23-node topology
 │
-├── README.md                     ← This file
+├── capture/
+│   └── capture_session.sh             ← Bash orchestrator (v4)
 │
-│   ── Generated outputs (created on first run) ──
+├── pipeline/
+│   ├── ids_pipeline_v18.py            ← ML pipeline (train / evaluate-pcap / evaluate-csv)
+│   └── ids_dt2_Ext_Validation.ipynb   ← external-validation notebook
 │
-├── ipv6_ids_dataset.csv          ← Extracted & labelled feature dataset
-├── feature_selection_curve.png   ← Feature count vs accuracy + CV band plot
-├── confusion_matrix_best_k.png   ← Confusion matrix at optimal k
-├── comparative_line_graph.png    ← Rolling-mean time-series per class
-├── comparative_bar_graph.png     ← Class distribution + feature mean bars
-├── per_class_metrics.png         ← Precision / Recall / F1 grouped bar chart
-└── interactive_3d_classification.html  ← Interactive Plotly 3-D scatter
+└── archive/                           ← (optional) earlier RF-only baseline
+    └── ipv6_na_ra_pipeline.py
 ```
+
+> **What is intentionally not in this repo.** Large binary artefacts — the raw PCAP (≈400–600 MB) and the external dataset (`Labdataset.csv`) — are excluded from git. The PCAP is regenerated by Stage 2; the external dataset is acquired separately by the reader. If a fixed reference capture is needed for archival reproducibility, it should be attached to a GitHub Release or deposited externally (for example, on Zenodo) and linked from this README.
+
+If your local layout flattens these folders into the repo root, adjust the paths in the commands below accordingly — none of the scripts hard-code the folder names except where noted.
 
 ---
 
-## 7. Running the Pipeline
+## 3. Stage map
 
-### Standard run (real pcap)
+The experiment has four sequential stages. Stages 1 and 2 run inside WSL2 on Linux; Stages 3 and 4 run on the Windows side in VS Code.
 
-Place `raw_capture.pcap` in the same directory as the script, then run:
+| Stage | Where it runs | What it produces |
+|---|---|---|
+| 1. Build the digital twin | WSL2 / Containerlab | 23 running containers (1 switch, 1 router, 1 attacker, 20 victims) |
+| 2. Capture the dataset | WSL2 / Bash | `raw_capture.pcap` + `raw_capture_events.csv` + `raw_capture_nodes.csv` |
+| 3. Train and evaluate | Windows / VS Code / `ipv6env` | `ids_model_v18.joblib` + five PNG visualisations |
+| 4. External validation | Windows / VS Code / Jupyter | Per-class metrics on the external dataset, appended to a results table |
+
+---
+
+## 4. Prerequisites
+
+### Host
+
+- Windows 11 (x64) with at least one fixed drive (the capture script writes to `D:` by default) and ≈2 GB free for a single capture run.
+- WSL2 with Ubuntu 22.04 (or 24.04). Install with `wsl --install -d Ubuntu-22.04` from an elevated PowerShell, then reboot.
+
+### Inside WSL2
+
+- Docker Engine — install from the official Docker apt repository, then `sudo service docker start`.
+- Containerlab — `bash -c "$(curl -sL https://get.containerlab.dev)"`.
+- `tcpdump` and `tshark` — `sudo apt-get install -y tcpdump tshark`. The capture script auto-installs `tcpdump` inside the switch container if missing; `tshark` is used only on the host for the end-of-run packet count summary and is optional.
+
+### On Windows
+
+- Python 3.10 or 3.11.
+- Visual Studio Code with the Python and Jupyter extensions.
+- A Python virtual environment named `ipv6env` (see Stage 3).
+
+### Python packages
+
+| Package | Used for |
+|---|---|
+| `numpy`, `pandas` | Feature dataframe handling |
+| `scapy` | PCAP parsing (`PcapReader`, ICMPv6 layers) |
+| `scikit-learn` | `StratifiedKFold`, scaling, encoding, RandomForest, `SelectKBest` (ANOVA-F), `learning_curve`, `cross_validate`, metrics |
+| `xgboost` | Co-primary classifier, wrapped in `_SafeXGB` |
+| `imbalanced-learn` | SMOTE oversampling on training folds only |
+| `matplotlib` | Visualisations (Agg backend, PNG output) |
+| `joblib` | Model bundle persistence |
+| `lightgbm`, `catboost` *(optional)* | Detected if installed; not required for the headline result |
+
+---
+
+## 5. Stage 1 — Build the digital twin
+
+The topology (`topology/ipv6-research.clab.yml`) defines 23 nodes joined by a single Layer 2 segment inside a Linux bridge that runs inside its own container.
+
+```
+              ┌──────────────────────────────────────────────────┐
+              │              Containerlab: ipv6-research          │
+              │                                                  │
+   [router]───┼──┐                                               │
+   (radvd)    │  │                                               │
+              │  ▼                                               │
+   [attacker]─┼──► [switch-br] ◄──── [victim, victim2 … victim20]│
+   (Kali +    │   (br0 bridge inside                              │
+   THC-IPv6)  │    an Alpine container)                          │
+              │                                                  │
+              │   tcpdump runs on br0 inside switch-br           │
+              └──────────────────────────────────────────────────┘
+```
+
+| Node | Image | Role |
+|---|---|---|
+| `switch-br` | `alpine:latest` | Hosts the `br0` Linux bridge and runs the tcpdump capture |
+| `router` | `debian:bookworm-slim` | Legitimate Router Advertisement source (`radvd`) |
+| `attacker` | `kalilinux/kali-rolling` | Runs the THC-IPv6 toolkit |
+| `victim`, `victim2`, …, `victim20` | `debian:bookworm-slim` | Twenty hosts generating benign IPv6 background traffic |
+
+**Mount D: inside WSL** (the capture script writes to `/mnt/d/ipv6_research/`; it aborts early if the mount is missing):
 
 ```bash
-python ipv6_ids_pipeline.py
+sudo mkdir -p /mnt/d
+sudo mount -t drvfs D: /mnt/d
+ls /mnt/d
 ```
 
-The script will automatically detect the pcap file, extract features, and proceed through the full ML pipeline.
-
-### Synthetic demo (no pcap required)
+**Deploy the lab:**
 
 ```bash
-python ipv6_ids_pipeline.py --synthetic
+cd ~/where/you/cloned/ipv6-ids
+sudo clab deploy --topo topology/ipv6-research.clab.yml
+sudo clab inspect --topo topology/ipv6-research.clab.yml
 ```
 
-This generates a statistically realistic synthetic dataset (12,000 samples: 40% Normal, 35% RA_Attack, 25% ND_Attack) and runs the full pipeline without needing Scapy or a pcap file. This mode is useful for testing the pipeline on a new machine or demonstrating it without access to the original capture.
-
-### Automatic fallback
-
-If `raw_capture.pcap` is not found and `--synthetic` was not passed, the script automatically falls back to synthetic mode and prints a warning:
-
-```
-[!] pcap not found at './raw_capture.pcap'. Switching to synthetic dataset.
-```
+All 23 containers must show `STATE=running` before continuing.
 
 ---
 
-## 8. Pipeline Architecture
+## 6. Stage 2 — Capture the labelled dataset
 
-The pipeline executes the following 12 steps sequentially:
+The capture script (`capture/capture_session.sh`, version `v4`) is the single entry point for Stage 2. It provisions tools inside each container, assigns deterministic IPv6 addresses, starts legitimate router advertisements via `radvd`, launches benign background traffic from every victim, runs the attack schedule, captures everything on `br0`, and copies the results to the Windows filesystem.
 
-```
-Step 1  │ Load pcap OR generate synthetic dataset
-        ↓
-Step 2  │ Print dataset shape and class distribution
-        ↓
-Step 3  │ Save labelled DataFrame → ipv6_ids_dataset.csv
-        ↓
-Step 4  │ Preprocess: LabelEncoder + MinMaxScaler → X, y arrays
-        ↓
-Step 5  │ Validate k sweep values against available feature count
-        ↓
-Step 6  │ For each k ∈ {5, 10, 15, 20, 25, 30}:
-        │   ├─ SelectKBest (χ²) on training set
-        │   ├─ 10-fold Stratified CV → CV Balanced Acc, Macro F1
-        │   └─ Final fit + evaluate on held-out test set
-        ↓
-Step 7  │ Print per-k feature ranking table (top-5 per k)
-        ↓
-Step 8  │ Print dedicated accuracy report for top-5 features
-        ↓
-Step 9  │ Print full classification report at optimal k
-        ↓
-Step 10 │ Print full results summary table
-        ↓
-Step 11 │ Print optimal k recommendation with selected features
-        ↓
-Step 12 │ Generate all 6 output plots
+```bash
+chmod +x capture/capture_session.sh
+sudo ./capture/capture_session.sh
 ```
 
----
+`sudo` is required because the script executes `docker exec` against containers, manipulates `tc` qdiscs on the attacker, and uses `docker cp` to move the PCAP. It enables `set -Eeuo pipefail`; any unhandled error aborts the run and the cleanup trap stops `tcpdump`, removes any tc qdisc on the attacker, kills `radvd` on the router, and terminates background loops in the victims.
 
-## 9. Feature Engineering
+### What the script does, in order
 
-The pipeline extracts **30 per-packet features** grouped into four categories. All features are normalised to [0, 1] with MinMaxScaler before feature selection.
-
-### Layer-3 IPv6 Features (10 features)
-
-| Feature | Description |
-|---|---|
-| `ipv6_version` | IP version field (always 6) |
-| `ipv6_traffic_class` | DSCP / ECN traffic class byte |
-| `ipv6_flow_label` | 20-bit flow label field |
-| `ipv6_payload_length` | Payload length in bytes |
-| `ipv6_next_header` | Next header protocol number (58 = ICMPv6) |
-| `ipv6_hop_limit` | Hop limit (TTL equivalent); attacks always use 255 |
-| `ipv6_src_is_link_local` | 1 if source address is in `fe80::/10` |
-| `ipv6_dst_is_multicast` | 1 if destination is multicast (`ff00::/8`) |
-| `ipv6_src_prefix_16` | First 16-bit group of source address (integer) |
-| `ipv6_dst_prefix_16` | First 16-bit group of destination address (integer) |
-
-### ICMPv6 Presence & Type Features (8 features)
-
-| Feature | Description |
-|---|---|
-| `has_icmpv6` | 1 if packet contains any ICMPv6 layer |
-| `has_ra` | 1 if ICMPv6 Router Advertisement (Type 134) present |
-| `has_ns` | 1 if ICMPv6 Neighbor Solicitation (Type 135) present |
-| `has_na` | 1 if ICMPv6 Neighbor Advertisement (Type 136) present |
-| `has_rs` | 1 if ICMPv6 Router Solicitation (Type 133) present |
-| `icmpv6_type` | Raw ICMPv6 type number |
-| `icmpv6_code` | Raw ICMPv6 code number |
-| `icmpv6_payload_len` | Byte length of the ICMPv6 payload |
-
-### RA-Specific Features — ICMPv6 Type 134 (6 features)
-
-These features are only populated for Router Advertisement packets; all others are zero-padded.
-
-| Feature | Description |
-|---|---|
-| `ra_cur_hop_limit` | Advertised current hop limit field |
-| `ra_flags` | Combined M (managed) + O (other config) flag bits |
-| `ra_router_lifetime` | Router lifetime in seconds (0 or 65535 = suspicious) |
-| `ra_reachable_time` | Reachable time field in milliseconds |
-| `ra_retrans_timer` | Retransmission timer in milliseconds |
-| `ra_num_options` | Number of options appended to the RA message |
-
-### NS-Specific Features — ICMPv6 Type 135 (2 features)
-
-| Feature | Description |
-|---|---|
-| `ns_target_is_unspecified` | 1 if target address is `::` (the unspecified address) |
-| `ns_has_src_lladdr_option` | 1 if Src Link-Layer Address option is present |
-
-### Temporal / Flow-Level Features (3 features)
-
-| Feature | Description |
-|---|---|
-| `pkt_size` | Total packet size in bytes (L2 frame) |
-| `inter_arrival_ms` | Time since the previous IPv6 packet in milliseconds |
-| `cumulative_pkt_count` | Sequential packet index within the capture |
-
----
-
-## 10. Machine Learning Methodology
-
-### 10.1 Train/Test Split
-
-The dataset is divided using an **80/20 stratified split** (stratified on the `label` column) with `random_state=42` to ensure reproducibility. Stratification guarantees that the class proportions are preserved in both the training and test sets.
-
-### 10.2 Feature Selection — SelectKBest with χ²
-
-`SelectKBest` with the **chi-squared (χ²) statistic** is applied exclusively to the training portion to prevent data leakage. The χ² test measures the statistical independence between each feature and the target class label — a higher score means greater discriminative power.
-
-The feature selector is swept across k ∈ {5, 10, 15, 20, 25, 30}, producing a learning curve showing how classification performance changes as the feature budget increases.
-
-### 10.3 Random Forest Classifier
-
-A **Random Forest** with the following configuration is trained for each value of k:
-
-| Hyperparameter | Value | Rationale |
+| Step | Section | Action |
 |---|---|---|
-| `n_estimators` | 100 | Sufficient for stable variance reduction |
-| `class_weight` | `"balanced"` | Compensates for class imbalance in real captures |
-| `random_state` | 42 | Reproducibility |
-| `n_jobs` | -1 | Parallelises tree building across all CPU cores |
+| 0 | Provisioning | Installs `thc-ipv6`, `iproute2` and `bc` in the attacker; `iproute2`, `procps` and `radvd` in the router; `ndisc6`, `iputils-ping` and `bc` in every victim. Validates that the 80% temporal-split boundary falls inside an attack phase. |
+| 1 | Address assignment | Router `2001:db8::1`, attacker `2001:db8::100`, victims `2001:db8::2` through `2001:db8::15` (hex). |
+| 2 | Node identity metadata | Writes `nodes.csv` (role, container, ipv6, mac); captures the attacker's real MAC for comparison against the spoofed MACs later. |
+| 3 | Router advertisements | Starts `radvd` with prefix `2001:db8::/64`, `MinRtrAdvInterval` 3 s, `MaxRtrAdvInterval` 10 s, `AdvValidLifetime` 86400 s, `AdvPreferredLifetime` 14400 s. Asserts `radvd` is running by reading its pidfile. |
+| 4 | Packet capture | Starts `tcpdump` inside the switch container on `br0`, snap length 0, kernel buffer 16384 KB, unbuffered output, ICMPv6-only BPF filter (`icmp6`). |
+| 5 | Background traffic | Per victim, launches four parallel loops: jittered `ping6` to router/peer/multicast with periodic neighbour- and address-cache flushes to provoke DAD; an RS loop via `rdisc6 -1` every 5–11 s; a bursty multicast loop; a random-peer loop. `iperf3` is disabled by default. |
+| 6 | Phased experiment | Executes the 27 labelled phases (Section [Phase schedule](#phase-schedule) below). |
+| 7 | Copy to host | Sends `SIGINT` to `tcpdump`, copies the PCAP and CSVs to `/mnt/d/ipv6_research/run_<timestamp>/`, then copies them up to the dataset root with stable names. A `latest` symlink is created. |
 
-### 10.4 Cross-Validation
+### Attack tooling
 
-**10-fold Stratified K-Fold cross-validation** is applied to the training set for each k. This produces mean and standard deviation estimates of:
-- Balanced Accuracy
-- Macro F1-Score
-- Standard Accuracy
+| Tool | Role |
+|---|---|
+| `atk6-flood_router26 eth1` | Floods Router Advertisement messages (RA-flood and combined attack RA component). |
+| `atk6-flood_solicitate6 eth1` | Floods Neighbour Solicitation messages (ND-flood and combined attack ND component). |
 
-Cross-validation is performed on the training fold only; the held-out test set is never touched during this step.
+Two attack styles are used:
 
-### 10.5 Evaluation Metrics
+- **Variable-intensity**: alternating 3–10 s bursts and 2–7 s quiet intervals, with the attacker rate-limited by `tc tbf` to a random rate between 30 and 150 Mbit/s per burst. This models realistic, uneven attacker capacity.
+- **Low-and-slow**: a single one-second burst followed by a 3–8 s sleep, repeated for the phase duration. Tests detection of stealth variants.
 
-Three metrics are reported for every k:
+Before every attack phase the attacker's MAC is randomised to a locally-administered unicast address of the form `02:xx:xx:xx:xx:xx`; after the phase, the original MAC is restored. This prevents trivial MAC-equality leakage between training and inference.
 
-| Metric | Formula / Definition | Why It Matters Here |
+### Phase schedule
+
+The orchestrator runs 27 phases for a scripted total of 2720 s (~45 min). Phase durations are fixed at the top of the capture script.
+
+| Phase | Duration (s) | Cumulative (s) | Label | Notes |
+|---|---:|---:|---|---|
+| `warmup` | 20 | 20 | Normal | background startup |
+| `baseline_1` | 350 | 370 | Normal | benign RA/NS/NA |
+| `ra_attack_1` (variable) | 80 | 450 | RA_Attack | `atk6-flood_router26` |
+| `recovery_1` | 160 | 610 | Normal | |
+| `nd_attack_1` (variable) | 80 | 690 | ND_Attack | `atk6-flood_solicitate6` |
+| `recovery_2` | 160 | 850 | Normal | |
+| `ra_slow_1` | 100 | 950 | RA_Attack | low-and-slow RA |
+| `recovery_3` | 130 | 1080 | Normal | |
+| `ra_attack_2` (variable) | 80 | 1160 | RA_Attack | second RA flood |
+| `recovery_4` | 120 | 1280 | Normal | |
+| `nd_attack_2` (variable) | 80 | 1360 | ND_Attack | second NS flood |
+| `recovery_5` | 90 | 1450 | Normal | |
+| `ra_attack_4` (variable) | 90 | 1540 | RA_Attack | fourth RA flood |
+| `recovery_7` | 100 | 1640 | Normal | |
+| `nd_attack_3` (variable) | 80 | 1720 | ND_Attack | third NS flood |
+| `recovery_8` | 90 | 1810 | Normal | |
+| `nd_slow_1` | 75 | 1885 | ND_Attack | low-and-slow ND |
+| `recovery_9` | 90 | 1975 | Normal | |
+| `ra_attack_5` (variable) | 75 | 2050 | RA_Attack | fifth RA flood |
+| `recovery_10` | 80 | 2130 | Normal | |
+| `combined_attack` | 100 | 2230 | Combined_Attack | simultaneous RA + ND |
+| `recovery_6` | 60 | 2290 | Normal | short recovery |
+| `ra_attack_3` | 120 | 2410 | RA_Attack | straddles the 80% temporal cut |
+| `ra_slow_2` | 75 | 2485 | RA_Attack | second low-and-slow RA |
+| `nd_attack_4` (variable) | 75 | 2560 | ND_Attack | fourth NS flood |
+| `recovery_11` | 70 | 2630 | Normal | |
+| `baseline_final` | 90 | 2720 | Normal | clean tail |
+
+The straddle of `ra_attack_3` across the 80% boundary is intentional: it guarantees at least one attack window on the test side of a temporal split.
+
+### Outputs
+
+After a successful run, `/mnt/d/ipv6_research/` (`D:\ipv6_research\` on Windows) contains:
+
+| File / directory | Contents |
+|---|---|
+| `run_<YYYYmmdd_HHMMSS>/` | Per-run directory with the PCAP, both CSVs and `run.log` |
+| `latest` | Symlink to the most recent run directory |
+| `raw_capture.pcap` | The capture used as the pipeline input |
+| `raw_capture_events.csv` | Phase timeline: `ts_epoch, event, phase, label, notes` |
+| `raw_capture_nodes.csv` | Node identity: `role, container, ipv6, mac` |
+
+If `tshark` is installed on the host, the script prints a packet-count summary at the end (RS / RA / NS / NA / Echo counts, plus a sanity check that the PCAP size lies in the 400–600 MB target band).
+
+---
+
+## 7. Stage 3 — Train and evaluate the IDS
+
+All Python work runs on the Windows side. Copy the three Stage 2 outputs (`raw_capture.pcap`, `raw_capture_events.csv`, `raw_capture_nodes.csv`) into a working folder alongside `ids_pipeline_v18.py` and the notebook. `D:\ipv6_research\` is the natural choice because the capture script already writes there.
+
+### Set up `ipv6env` once
+
+From a Windows PowerShell prompt in the working folder:
+
+```powershell
+python -m venv ipv6env
+.\ipv6env\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install numpy pandas scapy scikit-learn xgboost imbalanced-learn matplotlib joblib lightgbm catboost
+python -c "import scapy, xgboost, imblearn, sklearn, joblib; print('OK')"
+```
+
+In VS Code, open the folder, then `Ctrl+Shift+P` → **Python: Select Interpreter** → pick `.\ipv6env\Scripts\python.exe`. The Jupyter extension uses the same interpreter automatically.
+
+### Train
+
+```bash
+python ids_pipeline_v18.py --mode train --pcap raw_capture.pcap
+```
+
+The pipeline first scans the PCAP for in-band marker packets (ICMPv6 echo from `2001:db8::ffff` with magic payload `IPV6IDS-MARKER-V1`). The v4 capture script does not emit these markers, so the count comes back as zero and the pipeline triggers its **v4 CSV fallback automatically**: it looks for files with the suffixes `_events.csv` and `_nodes.csv` beside the PCAP, finds `raw_capture_events.csv` and `raw_capture_nodes.csv`, and reconstructs the phase timeline and node identity from them. The fallback is logged on stdout. To override the auto-detected paths, pass `--events-csv` and `--nodes-csv` explicitly.
+
+### What the pipeline does, in order
+
+| Step | Stage | Action |
 |---|---|---|
-| **Balanced Accuracy** | Mean of per-class recall | Robust to class imbalance — attack classes may be minority classes in a real capture |
-| **Macro F1-Score** | Unweighted mean of per-class F1 | Penalises poor performance on any single class equally |
-| **Accuracy** | Correct predictions / total | Standard metric; can be misleading with imbalanced classes |
+| 1 | Marker / CSV ingest | Builds the phase timeline and node identity from the v4 CSVs (fallback path) or in-band markers (if present). |
+| 2 | Window extraction | Parses the PCAP with `scapy.PcapReader`, drops marker packets, buckets the rest into one-second windows, computes 18 features (see [§9](#9-features-classes-and-labelling)). `ra_rate` and `ns_rate` are dropped from the feature set (`ALWAYS_EXCLUDED_FEATURES`) to prevent label leakage. |
+| 3 | Class-balance assertion | Aborts if any class has fewer than `MIN_CLASS_WINDOWS = 10` windows. |
+| 4 | Preprocessing + splits | `StandardScaler` on all features. **Split A** uses `random_state=42`, **Split B** uses `random_state=123`, both stratified with `test_size=0.20`. **SMOTE** is applied to the training fold only if the smallest class falls below 15% of the majority, with `k_neighbors = min(5, n_min − 1)`. |
+| 5 | Feature ranking | ANOVA-F via `SelectKBest` on the training fold; top-10 features form `TOP_K_FEATURES`. |
+| 6 | Single-feature leakage scan | Each feature is fitted in isolation with a small RandomForest. Features with single-feature balanced accuracy above **0.999** are excluded entirely (`BACC-EXCLUDED`); features with single-feature ROC-AUC above **0.98** are warned about but retained. |
+| 7 | XGBoost sweep | 5-fold StratifiedKFold (`random_state=42`) over learning rates `[0.05, 0.1, 0.2, 0.3]` and max depths `[3, 4, 5, 6]`. The wrapper `_SafeXGB` carries `gamma=1.0, reg_lambda=2.0, reg_alpha=0.1, subsample=0.8, colsample_bytree=0.8`. |
+| 8 | Random Forest sweep | Same 5-fold protocol over `n_estimators [200, 300, 500]` and `max_depth [5, 7, 10, None]`. Fixed: `max_features='sqrt'`, `min_samples_leaf=3`, `class_weight='balanced_subsample'`. |
+| 9 | Final evaluation (Split A) | Reports train accuracy, test accuracy, overfitting gap, balanced accuracy, macro-F1, macro one-vs-rest ROC-AUC, PR-AUC and per-class precision/recall/F1 for both classifiers. |
+| 10 | Split B + 5-fold CV stability | Refits both classifiers on Split B (`random_state=123`); runs `cross_validate` on the full scaled, top-K feature matrix. Reports CV mean, CV std and Split A vs Split B delta. |
+| 11 | Bootstrap CIs | 500 bootstrap resamples (seeded) over the Split A test set, giving per-class and macro-F1 95% confidence intervals. |
+| 12 | Visualisations | Saves the PNGs listed in [§11](#11-outputs). |
+| 13 | Bundle persistence | Saves `ids_model_v18.joblib` (scaler, label encoder, full and top-K feature columns, both trained classifiers, selected hyperparameters). |
 
 ---
 
-## 11. Output Files
+## 8. Stage 4 — External validation
 
-After a successful run, the following files are written to the working directory:
+The external-validation step lives in `ids_dt2_Ext_Validation.ipynb`. It exists as a notebook rather than a script so that the column-discovery and label-mapping cells can be re-run interactively against any third-party dataset before committing to a mapping.
 
-| File | Type | Description |
-|---|---|---|
-| `ipv6_ids_dataset.csv` | CSV | Full labelled feature dataset extracted from the pcap |
-| `feature_selection_curve.png` | PNG | Dual-panel: test metrics vs k (left) + 10-fold CV with ±1 std band (right) |
-| `confusion_matrix_best_k.png` | PNG | Confusion matrix at the optimal k (highest Balanced Accuracy) |
-| `comparative_line_graph.png` | PNG | Rolling-mean time-series of top-5 features, one line per traffic class |
-| `comparative_bar_graph.png` | PNG | Class count distribution + mean ± std of top-5 features grouped by class |
-| `per_class_metrics.png` | PNG | Grouped bar chart: Precision, Recall, F1 per class at optimal k |
-| `interactive_3d_classification.html` | HTML | Plotly interactive 3-D scatter — open in any browser |
+Open the notebook in VS Code, select the `ipv6env` kernel, and run the cells from the top:
 
----
+1. **Inspect the external dataset.** Reads `Labdataset.csv`, prints its shape, lists every column, shows three rows.
+2. **Find the label column** by scanning column names for `label`, `class`, `attack`, `category` or `type`.
+3. *(Optional re-train.)* Shells out to `ids_pipeline_v18.py --mode train` if the bundle is missing.
+4. **Verify the bundle exists** (`ids_model_v18.joblib`).
+5. **Load the bundle.** Because `_SafeXGB` is defined inside `ids_pipeline_v18`, the notebook imports the module and re-registers `_SafeXGB` on `__main__` before calling `joblib.load`. **This step is required** — a plain `joblib.load(...)` will raise `AttributeError` because pickle can't find the class. The cell then prints the internal classes, feature columns, top-K features and selected hyperparameters.
+6. **Build the label map** from external labels to internal classes. The mapping used in this study is `{"Normal": "Normal", "Attack": "RA_Attack"}`. Substitute as appropriate for a different external dataset.
+7. **Score the external CSV:**
 
-## 12. Visualisations
+   ```bash
+   python ids_pipeline_v18.py --mode evaluate-csv \
+       --csv Labdataset.csv \
+       --label-column Class \
+       --label-map '{"Normal":"Normal","Attack":"RA_Attack"}'
+   ```
 
-### 12.1 Feature Selection Curve (`feature_selection_curve.png`)
+   The pipeline applies its default column renames (`Flow Packets/s → pkt_rate`, `Fwd IAT Mean → mean_iat_ms`, `Fwd IAT Std → std_iat_ms`, `Fwd IAT Min → min_iat_ms`) to align the external feature matrix to the internal feature set, scores it with both classifiers and appends a row of per-class metrics, ROC-AUC and PR-AUC to a results table.
 
-A dual-panel chart showing how classification performance changes as the number of selected features k increases.
-
-- **Left panel:** Three lines on the held-out test set — Test Accuracy (blue), Test Balanced Accuracy (orange), Test Macro F1 (green). A vertical dashed line marks the optimal k.
-- **Right panel:** 10-fold CV Balanced Accuracy and Macro F1 on the training set, shown as lines with a ±1 standard deviation shaded band.
-
-This plot is the primary tool for selecting the final feature budget for deployment.
-
-### 12.2 Confusion Matrix (`confusion_matrix_best_k.png`)
-
-A heatmap confusion matrix evaluated on the held-out test set at the optimal k. Rows represent the true class, columns represent the predicted class. Perfect detection appears as a diagonal matrix.
-
-### 12.3 Comparative Line Graph (`comparative_line_graph.png`)
-
-For each of the top-5 most important features (by χ² score), a sub-plot shows the **rolling mean** (window = 100 packets) of that feature's value over packet index, with a separate coloured line per class:
-
-- **Blue** — Normal traffic
-- **Orange/Red** — RA_Attack
-- **Green** — ND_Attack
-
-This visualisation highlights how attack traffic is temporally distinct from normal traffic in key feature dimensions such as `inter_arrival_ms` and `ipv6_hop_limit`.
-
-### 12.4 Comparative Bar Graph (`comparative_bar_graph.png`)
-
-A multi-panel bar chart with one panel per top-5 feature plus a class distribution overview:
-
-- **Leftmost panel:** Total packet counts per class (Normal / RA_Attack / ND_Attack).
-- **Remaining panels:** Mean ± standard deviation of each feature grouped by class, with exact mean values annotated above each bar.
-
-### 12.5 Per-Class Metrics Chart (`per_class_metrics.png`)
-
-A grouped bar chart showing **Precision**, **Recall**, and **F1-Score** side by side for each of the three traffic classes at the optimal k. Exact values are annotated above each bar for thesis reporting.
-
-### 12.6 Interactive 3-D Scatter (`interactive_3d_classification.html`)
-
-A fully interactive Plotly scatter plot projecting the test-set samples into the 3-D space defined by the three highest-ranked features. Open this file in any modern browser (Chrome, Firefox, Edge).
-
-- **Colour** encodes the true class label.
-- **Circle markers** (●) indicate correct predictions.
-- **X markers** (✕) indicate misclassifications.
-- **Hover tooltip** shows true label, predicted label, and the exact feature values for any individual point.
-- The plot can be rotated, zoomed, and panned interactively. Traces can be toggled in the legend.
+`Labdataset.csv` is not included in this repository. Acquire it separately and place it alongside the notebook.
 
 ---
 
-## 13. Configuration Reference
+## 9. Features, classes and labelling
 
-The following constants at the top of `ipv6_ids_pipeline.py` can be adjusted without changing the pipeline logic:
+### Classes
 
-| Constant | Default | Description |
-|---|---|---|
-| `PCAP_FILE` | `"./raw_capture.pcap"` | Path to the input pcap file |
-| `CSV_OUTPUT` | `"ipv6_ids_dataset.csv"` | Output path for the labelled CSV dataset |
-| `K_SWEEP` | `[5, 10, 15, 20, 25, 30]` | Feature count values to evaluate |
-| `RANDOM_STATE` | `42` | Global random seed for reproducibility |
-| `N_FOLDS` | `10` | Number of cross-validation folds |
-| `TEST_SIZE` | `0.20` | Proportion of data held out for testing |
-| `N_TREES` | `100` | Number of trees in the Random Forest |
+| Label | Meaning |
+|---|---|
+| `Normal` | Benign IPv6/ICMPv6 traffic during warmup, baselines and recovery phases |
+| `RA_Attack` | Router Advertisement flood (variable-rate or low-and-slow) |
+| `ND_Attack` | Neighbour Solicitation flood (variable-rate or low-and-slow) |
+| `Combined_Attack` | Simultaneous RA + NS flooding |
 
----
+A window's label is derived from the **phase timeline** (the events CSV) — not from packet content — so labels are deterministic across runs.
 
-## 14. Troubleshooting
+### Features (1-second windows)
 
-**`ImportError: No module named 'scapy'`**  
-Scapy is not installed. Either install it (`pip install scapy`) or run with the `--synthetic` flag to bypass pcap parsing entirely.
+| Feature | Description |
+|---|---|
+| `pkt_rate` | Total packets in the window |
+| `ra_rate` | RA (type 134) count *(excluded from training as leakage)* |
+| `ns_rate` | NS (type 135) count *(excluded from training as leakage)* |
+| `na_rate` | NA (type 136) count |
+| `ra_burst_rate` | Max RA rate within a 250 ms sub-window |
+| `ns_burst_rate` | Max NS rate within a 250 ms sub-window |
+| `unique_src_count` | Distinct source IPv6 addresses |
+| `unique_dst_count` | Distinct destination IPv6 addresses |
+| `mean_iat_ms` | Mean inter-arrival time (ms) |
+| `std_iat_ms` | Std of inter-arrival time (ms) |
+| `min_iat_ms` | Minimum inter-arrival time (ms) |
+| `burstiness` | `std_iat_ms / mean_iat_ms` |
+| `multicast_ratio` | Fraction of packets destined to `ff00::/8` |
+| `src_diversity` | `unique_src_count / pkt_rate` |
+| `ra_src_diversity` | Distinct RA sources / RA count |
+| `ns_unique_tgt_r` | Distinct NS targets / NS count |
+| `sliding_nd_ratio_3s` | RA+NS+NA fraction over a 3-second sliding window |
+| `time_bucket` | *(metadata, excluded from training)* |
 
-**`MemoryError` during Random Forest training**  
-Reduce `N_TREES` (e.g., to 50) or reduce the synthetic dataset size in `generate_synthetic_dataset(n_samples=...)`. On Windows, also ensure you are running inside `if __name__ == "__main__":` to avoid multiprocessing issues — this is already handled in the script.
-
-**`FileNotFoundError: raw_capture.pcap`**  
-The script will automatically fall back to synthetic mode. If you intend to use a real capture, verify the path set in `PCAP_FILE` matches the actual location of the file.
-
-**Plotly 3-D graph does not open**  
-The file `interactive_3d_classification.html` is saved to disk. Open it manually by double-clicking it in your file explorer, or drag it into a browser window. It does not open automatically from the terminal.
-
-**Plots are blank or not saved (headless server)**  
-The script uses `matplotlib.use("Agg")` to force the non-interactive Agg backend, which writes files without opening a display window. This is correct behaviour on servers and in VS Code integrated terminals. The PNG files are saved to the working directory.
-
-**`ValueError: k` exceeds number of features**  
-This occurs if the pcap produces fewer than 30 IPv6 packets. The script automatically filters `K_SWEEP` to only include values ≤ the actual feature count and adjusts gracefully.
-
----
-
-## 15. Background & Theory
-
-### IPv6 Neighbor Discovery Protocol (NDP)
-
-NDP (RFC 4861) is the IPv6 replacement for ARP. It uses five ICMPv6 message types to handle address resolution, router discovery, and duplicate address detection on a link. The messages most relevant to this project are:
-
-- **Router Advertisement (Type 134):** Sent by routers to announce their presence and network configuration parameters (prefix, MTU, hop limit) to hosts.
-- **Neighbor Solicitation (Type 135):** Sent by a node to discover the link-layer address of a neighbour or to verify that a cached address is still reachable.
-
-### Attack Threat Model
-
-**RA Flood (atk6-flood_router26):** Because NDP has no built-in authentication (absent SEND / RFC 3971), any node on the link can forge Router Advertisement packets. An attacker can inject hundreds of fake RAs per second, each advertising itself as the default router. Victim hosts update their routing table with each valid-looking RA, causing routing instability, denial-of-service, or traffic redirection (man-in-the-middle).
-
-**ND Exhaustion (atk6-flood_solicitate6):** Each Neighbor Solicitation for a previously unseen address forces the receiving host to allocate a `INCOMPLETE` entry in its neighbor cache. By flooding with solicitations targeting random addresses, the attacker exhausts the fixed-size neighbor cache, causing legitimate address resolution to fail and potentially crashing the network stack.
-
-### Why Random Forest?
-
-Random Forests are well-suited to this problem for several reasons: they handle mixed numerical features without strong distributional assumptions, they are robust to the high variance of network traffic features, they provide feature importances natively (complementing SelectKBest), and they tolerate class imbalance well when `class_weight="balanced"` is set.
-
-### Why χ² Feature Selection?
-
-After MinMax scaling to [0, 1], all features are non-negative, satisfying the χ² test's requirement. The χ² statistic directly measures the statistical dependence between each feature and the class label, ranking features by how much information they individually contribute to classification. This is computationally inexpensive and produces an interpretable ranking that directly informs which network-layer fields are the strongest attack indicators.
+Marker packets sourced from `2001:db8::ffff` (when present) are excluded from feature extraction.
 
 ---
 
-*Master's Thesis — IPv6 Network Security | Containerlab Digital Twin | ML-based IDS*
+## 10. Fixed seeds and constants
+
+Every source of randomness is seeded. The values below are read directly from `ids_pipeline_v18.py`.
+
+| Constant | Value |
+|---|---|
+| `RANDOM_STATE` (Split A, XGB, RF, SMOTE, bootstrap) | `42` |
+| `RANDOM_STATE_B` (Split B, SMOTE on Split B) | `123` |
+| `N_FOLDS` | `5` |
+| `TEST_SIZE` | `0.20` |
+| `PRIMARY_K` (top-K features) | `10` |
+| `XGB_LR_SWEEP` | `[0.05, 0.1, 0.2, 0.3]` |
+| `XGB_DEPTH_SWEEP` | `[3, 4, 5, 6]` |
+| `RF_NEST_SWEEP` | `[200, 300, 500]` |
+| `RF_DEPTH_SWEEP` | `[5, 7, 10, None]` |
+| `BOOTSTRAP_N_ITER` | `500` |
+| `MIN_CLASS_WINDOWS` | `10` |
+| `LEAKAGE_AUC_WARN` | `0.98` |
+| `MAX_SINGLE_FEAT_BACC` | `0.999` |
+| `ALWAYS_EXCLUDED_FEATURES` | `{ra_rate, ns_rate}` |
+| `BURST_SUBWINDOW` | `0.25` s |
+| matplotlib backend | `Agg` (non-interactive, PNG only) |
+
+---
+
+## 11. Outputs
+
+A successful training run writes the following to the working folder:
+
+| Output | Description |
+|---|---|
+| `ids_model_v18.joblib` | Serialised bundle used by `evaluate-pcap` and `evaluate-csv` |
+| `confusion_matrices.png` | Side-by-side confusion matrices for XGBoost and Random Forest on Split A |
+| `learning_curve.png` | Train and validation balanced-accuracy curves over a 10–100% training-size sweep for both classifiers |
+| `iat_per_class.png` | Log-scale boxplot of `mean_iat_ms` per class |
+| Additional figures | Feature-ranking and split-comparison plots saved earlier in the pipeline |
+
+Total wall-clock time on a modern laptop is on the order of a few minutes per 400–600 MB PCAP, dominated by scapy parsing and the XGBoost CV sweep.
+
+---
+
+## 12. Reproducibility and falsifiability
+
+The central empirical claim of the thesis is that the trained XGBoost and Random Forest classifiers separate the four ICMPv6 traffic classes on one-second windows above the in-distribution balanced-accuracy and macro-F1 figures reported in the thesis Results chapter, with the bootstrap 95% confidence intervals also given there.
+
+The claim is falsifiable in two ways. **First**, a reader who rebuilds the lab from the published topology, runs `capture_session.sh` unmodified, trains the pipeline with the published seeds and obtains balanced-accuracy or macro-F1 outside the reported intervals has refuted the in-distribution claim for that environment. **Second**, a reader who runs the external-validation step against a substantively different IPv6 ND/RA dataset and obtains performance no better than the `DummyClassifier` baseline (which the pipeline computes for comparison) has refuted the generalisation claim. Both routes require nothing beyond the artefacts in this repository and the steps above.
+
+The expected sources of bounded run-to-run variability are the random MAC spoofing in `spoof_attacker_mac`, the randomised burst and quiet durations in the variable-intensity attacks, and kernel-level packet scheduling under high-rate floods. These vary per-window packet counts at the margin but, because labelling is derived from the deterministic phase timeline, the windowed dataset *structure* (number of phases, durations, labels) is identical between runs. The cross-validation and bootstrap procedures quantify the remaining variability.
+
+---
+
+## 13. Troubleshooting
+
+**`ERROR: /mnt/d is not mounted`** — Inside WSL2: `sudo mount -t drvfs D: /mnt/d`. Edit the `DATASET_ROOT` constant near the top of `capture_session.sh` if you prefer a different drive.
+
+**`docker: permission denied`** — Either run the script with `sudo` (the documented way) or add your WSL user to the `docker` group with `sudo usermod -aG docker $USER` and start a new shell.
+
+**`AttributeError: Can't get attribute '_SafeXGB' on <module '__main__' ...>`** when loading the model bundle — Use the registration shim from Cell 5 of the notebook:
+
+```python
+import sys; sys.path.insert(0, ".")
+import ids_pipeline_v18
+import __main__; __main__._SafeXGB = ids_pipeline_v18._SafeXGB
+bundle = joblib.load("./ids_model_v18.joblib")
+```
+
+**`[FATAL] Could not load phase data from events.csv`** — The pipeline's v4 CSV fallback couldn't find the companion CSVs. Either place `raw_capture_events.csv` and `raw_capture_nodes.csv` beside the PCAP, or pass `--events-csv` and `--nodes-csv` explicitly.
+
+**`[FATAL] Insufficient windows: [...]`** — A class has fewer than 10 one-second windows, almost always because the capture was truncated. Re-run the full 2720 s schedule; do not edit individual phase durations downwards without revisiting `MIN_CLASS_WINDOWS`.
+
+**`[WARN] xgboost not installed`** — XGBoost is co-primary in v18; without it the headline result cannot be reproduced. Install it inside `ipv6env`: `pip install xgboost`.
+
+**PCAP size outside the 400–600 MB target band** — A much smaller PCAP usually means the attack phases were cut short or `tcpdump` died mid-run; check `run.log`. A much larger PCAP usually means `iperf3` was enabled — confirm `ENABLE_IPERF=0`.
+
+**Plots not appearing** — `matplotlib.use("Agg")` is intentional; PNGs are saved to the current working directory rather than displayed. Open them from your file explorer.
+
+---
+
+## 14. Threat model and background
+
+**IPv6 Neighbour Discovery Protocol (NDP, RFC 4861)** replaces ARP and uses ICMPv6 message types 133–137. Two are central here:
+
+- **Router Advertisement (type 134)** — Routers announce their presence, prefix, MTU and hop limit to hosts. Unauthenticated by default (in the absence of SEND / RFC 3971).
+- **Neighbour Solicitation (type 135)** — Hosts resolve link-layer addresses and verify reachability of cached neighbours.
+
+**RA flood (`atk6-flood_router26`)** — Forged RAs at high rate, each from a different randomised link-local source with a manipulated router-lifetime field. Victim default routes oscillate, opening DoS and on-path attack windows.
+
+**ND exhaustion (`atk6-flood_solicitate6`)** — NS messages targeting randomised addresses force `INCOMPLETE` entries into the neighbour cache, exhausting kernel memory and degrading address resolution.
+
+**Combined attack** — Both floods in parallel, also rate-limited and bursty. This is the class the pipeline is explicitly evaluated on; it does not appear in many comparable studies and is one of the differentiators of this work.
+
+---
+
+## 15. Citation
+
+If you use this repository or the methodology described above, please cite the thesis:
+
+```
+@mastersthesis{ipv6_ids_thesis_2026,
+  title  = {Machine-Learning-Based Detection of IPv6 Neighbour Discovery and
+            Router Advertisement Attacks in a Digital Twin Network},
+  author = {<Your Full Name>},
+  school = {<Your Institution>},
+  year   = {2026},
+  url    = {https://github.com/re-deemer/ipv6-ids}
+}
+```
+
+Fill in your name and institution; if you publish a paper from the thesis, replace this block with the paper citation.
+
+---
+
+## 16. License
+
+Add a license file at the repo root before publishing (`LICENSE`). For a permissive open-source release, **MIT** or **Apache-2.0** are conventional. For datasets and PCAPs, **CC BY 4.0** is the usual choice if you later attach them to a release.
+
+If you have not chosen a license yet, GitHub's [Add a license](https://docs.github.com/articles/adding-a-license-to-a-repository) flow takes about thirty seconds. Without a license file, the default position is "all rights reserved" and others cannot reproduce the work even with the code visible.

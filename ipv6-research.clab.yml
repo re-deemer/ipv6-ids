@@ -1,0 +1,216 @@
+name: ipv6-research
+
+topology:
+  nodes:
+    # --- 1. The Switch ---
+    switch-br:
+      kind: linux
+      image: alpine:latest
+      exec:
+        - apk add --no-cache bridge-utils
+        - brctl addbr br0
+        - brctl addif br0 eth1
+        - brctl addif br0 eth2
+        - brctl addif br0 eth3
+        - brctl addif br0 eth4
+        - brctl addif br0 eth5
+        - brctl addif br0 eth6
+        - brctl addif br0 eth7
+        - brctl addif br0 eth8
+        - brctl addif br0 eth9
+        - brctl addif br0 eth10
+        - brctl addif br0 eth11
+        - brctl addif br0 eth12
+        - brctl addif br0 eth13
+        - brctl addif br0 eth14
+        - brctl addif br0 eth15
+        - brctl addif br0 eth16
+        - brctl addif br0 eth17
+        - brctl addif br0 eth18
+        - brctl addif br0 eth19
+        - brctl addif br0 eth20
+        - brctl addif br0 eth21
+        - brctl addif br0 eth22
+        - ip link set dev br0 up
+
+    # --- 2. The Router ---
+    # sysctl forwarding is handled by the bash script at runtime, not here,
+    # because debian:bookworm-slim has no sysctl binary pre-installed.
+    router:
+      kind: linux
+      image: debian:bookworm-slim
+
+    # --- 3. Victim Machines (20 total) ---
+    victim:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim2:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim3:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim4:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim5:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim6:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim7:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim8:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim9:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim10:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim11:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim12:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim13:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim14:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim15:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim16:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim17:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim18:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim19:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    victim20:
+      kind: linux
+      image: debian:bookworm-slim
+      exec:
+        - sh -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq iproute2 ndisc6 iputils-ping"
+
+    # --- 4. The Attacker ---
+    attacker:
+      kind: linux
+      image: kalilinux/kali-rolling
+      exec:
+        - sh -c "apt-get update -qq && apt-get install -y -qq thc-ipv6 iproute2"
+
+  links:
+    # eth1 = router, eth2 = attacker, eth3–eth22 = victim 1–20
+    - endpoints: ["router:eth1",    "switch-br:eth1"]
+      mtu: 1500
+    - endpoints: ["attacker:eth1",  "switch-br:eth2"]
+      mtu: 1500
+    - endpoints: ["victim:eth1",    "switch-br:eth3"]
+      mtu: 1500
+    - endpoints: ["victim2:eth1",   "switch-br:eth4"]
+      mtu: 1500
+    - endpoints: ["victim3:eth1",   "switch-br:eth5"]
+      mtu: 1500
+    - endpoints: ["victim4:eth1",   "switch-br:eth6"]
+      mtu: 1500
+    - endpoints: ["victim5:eth1",   "switch-br:eth7"]
+      mtu: 1500
+    - endpoints: ["victim6:eth1",   "switch-br:eth8"]
+      mtu: 1500
+    - endpoints: ["victim7:eth1",   "switch-br:eth9"]
+      mtu: 1500
+    - endpoints: ["victim8:eth1",   "switch-br:eth10"]
+      mtu: 1500
+    - endpoints: ["victim9:eth1",   "switch-br:eth11"]
+      mtu: 1500
+    - endpoints: ["victim10:eth1",  "switch-br:eth12"]
+      mtu: 1500
+    - endpoints: ["victim11:eth1",  "switch-br:eth13"]
+      mtu: 1500
+    - endpoints: ["victim12:eth1",  "switch-br:eth14"]
+      mtu: 1500
+    - endpoints: ["victim13:eth1",  "switch-br:eth15"]
+      mtu: 1500
+    - endpoints: ["victim14:eth1",  "switch-br:eth16"]
+      mtu: 1500
+    - endpoints: ["victim15:eth1",  "switch-br:eth17"]
+      mtu: 1500
+    - endpoints: ["victim16:eth1",  "switch-br:eth18"]
+      mtu: 1500
+    - endpoints: ["victim17:eth1",  "switch-br:eth19"]
+      mtu: 1500
+    - endpoints: ["victim18:eth1",  "switch-br:eth20"]
+      mtu: 1500
+    - endpoints: ["victim19:eth1",  "switch-br:eth21"]
+      mtu: 1500
+    - endpoints: ["victim20:eth1",  "switch-br:eth22"]
+      mtu: 1500
