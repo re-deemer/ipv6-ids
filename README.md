@@ -49,6 +49,9 @@ ipv6-ids/
 ├── README.md                          ← this file
 ├── LICENSE                            ← see §16
 ├── .gitattributes
+├── ContainerLab_Logical_Topology.jpeg              ← physical topology diagram (§5)
+├── Container-Based_IPv6_Digital_Twin_Network_Architecture.png  ← end-to-end pipeline overview (§3)
+├── PRISMA_flow_diagram.png                         ← systematic literature review flow (§14)
 │
 ├── topology/
 │   └── ipv6-research.clab.yml         ← Containerlab 23-node topology
@@ -80,6 +83,12 @@ The experiment has four sequential stages. Stages 1 and 2 run inside WSL2 on Lin
 | 2. Capture the dataset | WSL2 / Bash | `raw_capture.pcap` + `raw_capture_events.csv` + `raw_capture_nodes.csv` |
 | 3. Train and evaluate | Windows / VS Code / `ipv6env` | `ids_model_v18.joblib` + five PNG visualisations |
 | 4. External validation | Windows / VS Code / Jupyter | Per-class metrics on the external dataset, appended to a results table |
+
+The diagram below shows the full end-to-end pipeline across all four stages, from topology deployment through traffic capture, ML training, and external evaluation:
+
+![IPV6 ContainerLab Digital Twin – End-to-End IDS Pipeline & Evaluation](Container-Based_IPv6_Digital_Twin_Network_Architecture.png)
+
+*Figure 1: End-to-end pipeline architecture — Stage 1 (Build), Stage 2 (Capture), Stage 3 (Build IDS), Stage 4 (Evaluate). The design follows a Build → Capture → Build IDS → Evaluate research procedure with clearly demarcated artefacts at each boundary.*
 
 ---
 
@@ -120,6 +129,12 @@ The experiment has four sequential stages. Stages 1 and 2 run inside WSL2 on Lin
 ## 5. Stage 1 — Build the digital twin
 
 The topology (`topology/ipv6-research.clab.yml`) defines 23 nodes joined by a single Layer 2 segment inside a Linux bridge that runs inside its own container.
+
+The physical layout of all 23 nodes is shown below. All victim end-devices connect to the central switch bridge, which in turn connects to the router (upstream to the internet) and is also reachable by the attacker node:
+
+![IPV6 ContainerLab Physical Topology — Digital Twin Network Model](ContainerLab_Logical_Topology.jpeg)
+
+*Figure 2: IPV6 ContainerLab physical topology. The switch bridge (`clab-ipv6-research-switch-br`) is the central Layer 2 hub. The attacker (`clab-ipv6-research-attacker`) and the router (`clab-ipv6-research-router`) each have a dedicated link to the bridge, as do all 20 victim end-devices (`victim1`–`victim20`). `tcpdump` captures ICMPv6 traffic on the `br0` interface inside the switch container.*
 
 ```
               ┌──────────────────────────────────────────────────┐
@@ -456,6 +471,16 @@ bundle = joblib.load("./ids_model_v18.joblib")
 **ND exhaustion (`atk6-flood_solicitate6`)** — NS messages targeting randomised addresses force `INCOMPLETE` entries into the neighbour cache, exhausting kernel memory and degrading address resolution.
 
 **Combined attack** — Both floods in parallel, also rate-limited and bursty. This is the class the pipeline is explicitly evaluated on; it does not appear in many comparable studies and is one of the differentiators of this work.
+
+### Literature review methodology
+
+The scope and design of this study were informed by a systematic literature review following PRISMA guidelines, searching four academic databases (IEEE Xplore, ACM DL, Scopus, Web of Science) for publications from 2022–2026. The flow diagram below documents the full screening and inclusion process:
+
+![PRISMA Flow Diagram — Systematic Literature Review](PRISMA_flow_diagram.png)
+
+*Figure 3: PRISMA flow diagram for the systematic literature review. Starting from 420 candidate records across four databases, 13 duplicates were removed, 383 records were excluded at title/abstract screening (no IPv6 focus, outside scope, no ML/AI, no NDP/RA/ICMPv6, no empirical evaluation, or non-peer-reviewed), and 10 further records were excluded at full-text assessment (no ML/AI model, full text not retrievable, or absence of NS/NA/RA message-type features), yielding **14 papers included for synthesis**.*
+
+The 14 included studies were used to identify: (a) the attack types and ICMPv6 message-type features most commonly reported in the literature; (b) the ML classifiers most frequently benchmarked against IPv6 ND/RA attacks; and (c) gaps in coverage — in particular, the near-absence of Combined_Attack evaluations and the use of controlled digital-twin environments for dataset generation. These gaps directly motivated the experimental choices described in Sections 5–8.
 
 ---
 

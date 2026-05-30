@@ -1,0 +1,3 @@
+source,model,accuracy,bacc,macro_f1,roc_auc,pr_auc
+Labdataset.csv,xgb,0.0028142955916362683,0.5,0.0028063975593565923,0.5,0.5
+Labdataset.csv,rf,0.0028142955916362683,0.5,0.0028063975593565923,0.5,0.5
